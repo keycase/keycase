@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: keycase
+      POSTGRES_PASSWORD: keycase
+      POSTGRES_DB: keycase
+    ports:
+      - "5432:5432"
+    volumes:
+      - keycase_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycase -d keycase"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  server:
+    build:
+      # Build from the parent dir so the sibling core/ package is in
+      # the Docker build context (path dependency in pubspec.yaml).
+      context: ..
+      dockerfile: keycase/Dockerfile
+    environment:
+      DATABASE_URL: postgres://keycase:keycase@db:5432/keycase?sslmode=disable
+      HOST: 0.0.0.0
+      PORT: "8080"
+      MIGRATIONS_DIR: /app/db/migrations
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  keycase_pg:
