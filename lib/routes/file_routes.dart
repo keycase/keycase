@@ -17,6 +17,33 @@ import '../storage/file_store.dart';
 /// fail fast instead of buffering hostile payloads.
 const int _maxUploadBytes = 50 * 1024 * 1024;
 
+/// Explicit allow-list of mime types the server will store. Anything
+/// else must come in as `application/octet-stream` (opaque ciphertext).
+/// The filter is a safety net — even though the server only ever sees
+/// ciphertext, a bad mime type on download could be weaponized against
+/// older browsers, so we canonicalize here.
+const Set<String> _allowedMimeTypes = {
+  'application/octet-stream',
+  'application/pdf',
+  'application/json',
+  'application/zip',
+  'application/x-tar',
+  'application/gzip',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/svg+xml',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/wav',
+  'video/mp4',
+  'video/webm',
+};
+
 void mountFileRoutes(
   Router app, {
   required IdentityRepo identities,
@@ -32,11 +59,29 @@ void mountFileRoutes(
     }
     final media = MediaType.parse(contentType);
     if (media.type != 'multipart' || media.subtype != 'form-data') {
-      throw const HttpError(400, 'content-type must be multipart/form-data');
+      throw const HttpError(
+        415,
+        'content-type must be multipart/form-data',
+        code: 'UNSUPPORTED_MEDIA_TYPE',
+      );
     }
     final boundary = media.parameters['boundary'];
     if (boundary == null) {
       throw const HttpError(400, 'multipart boundary missing');
+    }
+
+    // Fail fast on oversized uploads before we start buffering. The
+    // per-part streaming cap inside _readMultipartParts is the real
+    // enforcement — this just avoids accepting the body at all when
+    // the client has already declared an oversized length.
+    final declaredLength =
+        int.tryParse(request.headers['content-length'] ?? '');
+    if (declaredLength != null && declaredLength > _maxUploadBytes) {
+      throw const HttpError(
+        413,
+        'upload exceeds 50MB limit',
+        code: 'PAYLOAD_TOO_LARGE',
+      );
     }
 
     final (username, signature) = _parseAuthHeader(request);
@@ -84,16 +129,24 @@ void mountFileRoutes(
       throw const HttpError(400, 'metadata.folderId must be a string');
     }
 
-    final mimeType = filePart.contentType ?? 'application/octet-stream';
+    final rawMime = filePart.contentType ?? 'application/octet-stream';
+    final mimeType = _normalizeMime(rawMime);
+    final safeFilename = _sanitizeFilename(filename);
+    if (safeFilename.isEmpty) {
+      throw const HttpError(400, 'filename must contain safe characters');
+    }
+
+    final folderIdValue =
+        folderId == null ? null : requireUuid(folderId, field: 'folderId');
 
     final record = await files.uploadFile(
       ownerUsername: username,
-      filename: filename,
+      filename: safeFilename,
       mimeType: mimeType,
       sizeBytes: filePart.bytes.length,
       encryptedKey: encryptedKey,
       nonce: nonce,
-      folderId: folderId as String?,
+      folderId: folderIdValue,
     );
     await store.store(record.id, filePart.bytes);
     return jsonCreated(record.toJson());
@@ -102,7 +155,10 @@ void mountFileRoutes(
   // List files visible to caller.
   app.get('/api/v1/files', (Request request) async {
     final user = _requireAuth(request);
-    final folderId = request.url.queryParameters['folder'];
+    final raw = request.url.queryParameters['folder'];
+    final folderId = raw == null || raw.isEmpty
+        ? null
+        : requireUuid(raw, field: 'folder');
     final list = await files.listFiles(user, folderId: folderId);
     return jsonOk({
       'files': [for (final f in list) f.toJson()],
@@ -112,7 +168,8 @@ void mountFileRoutes(
   // File metadata.
   app.get('/api/v1/files/<id>', (Request request, String id) async {
     final user = _requireAuth(request);
-    final view = await files.getFile(id, user);
+    final fileId = requireUuid(id, field: 'id');
+    final view = await files.getFile(fileId, user);
     return jsonOk(view.toJson());
   });
 
@@ -120,8 +177,9 @@ void mountFileRoutes(
   app.get('/api/v1/files/<id>/download',
       (Request request, String id) async {
     final user = _requireAuth(request);
-    final view = await files.getFile(id, user);
-    final bytes = await store.retrieve(id);
+    final fileId = requireUuid(id, field: 'id');
+    final view = await files.getFile(fileId, user);
+    final bytes = await store.retrieve(fileId);
     return Response.ok(
       bytes,
       headers: {
@@ -136,7 +194,8 @@ void mountFileRoutes(
   // Delete file.
   app.delete('/api/v1/files/<id>', (Request request, String id) async {
     final user = _requireAuth(request);
-    final record = await files.deleteFile(id, user);
+    final fileId = requireUuid(id, field: 'id');
+    final record = await files.deleteFile(fileId, user);
     await store.delete(record.id);
     return jsonOk({'ok': true});
   });
@@ -145,18 +204,13 @@ void mountFileRoutes(
   app.post('/api/v1/files/<id>/share',
       (Request request, String id) async {
     final user = _requireAuth(request);
+    final fileId = requireUuid(id, field: 'id');
     final body = await readJsonBody(request);
-    final shareWith = body['username'];
-    final encryptedKey = body['encryptedKey'];
-    final nonce = body['nonce'];
-    if (shareWith is! String ||
-        encryptedKey is! String ||
-        nonce is! String) {
-      throw const HttpError(400,
-          'username, encryptedKey, and nonce are required strings');
-    }
+    final shareWith = requireString(body, 'username', maxLength: 64);
+    final encryptedKey = requireString(body, 'encryptedKey');
+    final nonce = requireString(body, 'nonce');
     await files.shareFile(
-      fileId: id,
+      fileId: fileId,
       ownerUsername: user,
       sharedWithUsername: shareWith,
       encryptedKey: encryptedKey,
@@ -169,8 +223,9 @@ void mountFileRoutes(
   app.delete('/api/v1/files/<id>/share/<username>',
       (Request request, String id, String username) async {
     final user = _requireAuth(request);
+    final fileId = requireUuid(id, field: 'id');
     await files.unshareFile(
-      fileId: id,
+      fileId: fileId,
       ownerUsername: user,
       sharedWithUsername: username,
     );
@@ -181,25 +236,23 @@ void mountFileRoutes(
   app.post('/api/v1/folders', (Request request) async {
     final user = _requireAuth(request);
     final body = await readJsonBody(request);
-    final name = body['name'];
-    final parentFolderId = body['parentFolderId'];
-    if (name is! String || name.trim().isEmpty) {
-      throw const HttpError(400, 'name is a required non-empty string');
-    }
-    if (parentFolderId != null && parentFolderId is! String) {
-      throw const HttpError(400, 'parentFolderId must be a string');
-    }
+    final name = requireString(body, 'name', maxLength: 128);
+    final parentFolderId =
+        optionalUuid(body['parentFolderId'], field: 'parentFolderId');
     final folder = await files.createFolder(
       ownerUsername: user,
       name: name,
-      parentFolderId: parentFolderId as String?,
+      parentFolderId: parentFolderId,
     );
     return jsonCreated(folder.toJson());
   });
 
   app.get('/api/v1/folders', (Request request) async {
     final user = _requireAuth(request);
-    final parent = request.url.queryParameters['parent'];
+    final parentRaw = request.url.queryParameters['parent'];
+    final parent = parentRaw == null || parentRaw.isEmpty
+        ? null
+        : requireUuid(parentRaw, field: 'parent');
     final list = await files.listFolders(user, parentFolderId: parent);
     return jsonOk({
       'folders': [for (final f in list) f.toJson()],
@@ -209,9 +262,19 @@ void mountFileRoutes(
   app.delete('/api/v1/folders/<id>',
       (Request request, String id) async {
     final user = _requireAuth(request);
-    await files.deleteFolder(id, user);
+    final folderId = requireUuid(id, field: 'id');
+    await files.deleteFolder(folderId, user);
     return jsonOk({'ok': true});
   });
+}
+
+String _normalizeMime(String raw) {
+  // Strip any parameter suffix like "; charset=utf-8" before checking.
+  final semi = raw.indexOf(';');
+  final base = (semi == -1 ? raw : raw.substring(0, semi)).trim().toLowerCase();
+  if (base.isEmpty) return 'application/octet-stream';
+  if (_allowedMimeTypes.contains(base)) return base;
+  return 'application/octet-stream';
 }
 
 String _requireAuth(Request request) {

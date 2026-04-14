@@ -7,6 +7,7 @@ import '../http/middleware.dart';
 import '../http/responses.dart';
 
 final RegExp _teamNameRegExp = RegExp(r'^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])$');
+final RegExp _usernameRegExp = RegExp(r'^[a-z0-9]{3,32}$');
 
 void mountTeamRoutes(
   Router app, {
@@ -17,18 +18,11 @@ void mountTeamRoutes(
   app.post('/api/v1/teams', (Request request) async {
     final user = _requireAuth(request);
     final body = await readJsonBody(request);
-    final name = body['name'];
-    final displayName = body['displayName'];
-    if (name is! String || displayName is! String) {
-      throw const HttpError(400,
-          'name and displayName are required strings');
-    }
+    final name = requireString(body, 'name', maxLength: 64);
+    final displayName = requireString(body, 'displayName', maxLength: 128);
     if (!_teamNameRegExp.hasMatch(name)) {
       throw const HttpError(400,
           'name must be 3-64 chars, lowercase alphanumeric and hyphens');
-    }
-    if (displayName.trim().isEmpty) {
-      throw const HttpError(400, 'displayName must not be blank');
     }
     final team = await teams.createTeam(
       name: name,
@@ -50,11 +44,12 @@ void mountTeamRoutes(
   // Team details (members-only).
   app.get('/api/v1/teams/<id>', (Request request, String id) async {
     final user = _requireAuth(request);
-    final team = await teams.getTeam(id);
+    final teamId = requireUuid(id, field: 'id');
+    final team = await teams.getTeam(teamId);
     if (team == null) {
       throw const HttpError(404, 'team not found');
     }
-    await teams.requireMembership(id, user);
+    await teams.requireMembership(teamId, user);
     return jsonOk(team.toJson());
   });
 
@@ -62,14 +57,12 @@ void mountTeamRoutes(
   app.post('/api/v1/teams/<id>/members',
       (Request request, String id) async {
     final user = _requireAuth(request);
+    final teamId = requireUuid(id, field: 'id');
     final body = await readJsonBody(request);
-    final username = body['username'];
-    final role = body['role'];
-    if (username is! String || role is! String) {
-      throw const HttpError(400, 'username and role are required strings');
-    }
+    final username = _requireUsername(requireString(body, 'username'));
+    final role = requireString(body, 'role', maxLength: 16);
     final member = await teams.addMember(
-      teamId: id,
+      teamId: teamId,
       username: username,
       role: role,
       addedByUsername: user,
@@ -81,9 +74,10 @@ void mountTeamRoutes(
   app.delete('/api/v1/teams/<id>/members/<username>',
       (Request request, String id, String username) async {
     final user = _requireAuth(request);
+    final teamId = requireUuid(id, field: 'id');
     await teams.removeMember(
-      teamId: id,
-      username: username,
+      teamId: teamId,
+      username: _requireUsername(username),
       removedByUsername: user,
     );
     return jsonOk({'ok': true});
@@ -93,14 +87,12 @@ void mountTeamRoutes(
   app.put('/api/v1/teams/<id>/members/<username>/role',
       (Request request, String id, String username) async {
     final user = _requireAuth(request);
+    final teamId = requireUuid(id, field: 'id');
     final body = await readJsonBody(request);
-    final role = body['role'];
-    if (role is! String) {
-      throw const HttpError(400, 'role is a required string');
-    }
+    final role = requireString(body, 'role', maxLength: 16);
     final member = await teams.updateRole(
-      teamId: id,
-      username: username,
+      teamId: teamId,
+      username: _requireUsername(username),
       newRole: role,
       updatedByUsername: user,
     );
@@ -110,7 +102,8 @@ void mountTeamRoutes(
   // Delete team.
   app.delete('/api/v1/teams/<id>', (Request request, String id) async {
     final user = _requireAuth(request);
-    await teams.deleteTeam(teamId: id, username: user);
+    final teamId = requireUuid(id, field: 'id');
+    await teams.deleteTeam(teamId: teamId, username: user);
     return jsonOk({'ok': true});
   });
 
@@ -118,25 +111,27 @@ void mountTeamRoutes(
   app.post('/api/v1/teams/<id>/messages',
       (Request request, String id) async {
     final user = _requireAuth(request);
+    final teamId = requireUuid(id, field: 'id');
     final body = await readJsonBody(request);
     final rawRecipients = body['recipients'];
     if (rawRecipients is! List) {
       throw const HttpError(400, 'recipients must be a list');
+    }
+    if (rawRecipients.isEmpty) {
+      throw const HttpError(400, 'recipients must not be empty');
+    }
+    if (rawRecipients.length > 500) {
+      throw const HttpError(400, 'recipients must be at most 500 entries');
     }
     final entries = <TeamMessageRecipient>[];
     for (final raw in rawRecipients) {
       if (raw is! Map) {
         throw const HttpError(400, 'each recipient must be an object');
       }
-      final username = raw['username'];
-      final encryptedBody = raw['encryptedBody'];
-      final nonce = raw['nonce'];
-      if (username is! String ||
-          encryptedBody is! String ||
-          nonce is! String) {
-        throw const HttpError(400,
-            'each recipient requires username, encryptedBody, nonce strings');
-      }
+      final map = Map<String, dynamic>.from(raw);
+      final username = _requireUsername(requireString(map, 'username'));
+      final encryptedBody = requireString(map, 'encryptedBody');
+      final nonce = requireString(map, 'nonce');
       entries.add(TeamMessageRecipient(
         recipientUsername: username,
         encryptedBody: encryptedBody,
@@ -144,7 +139,7 @@ void mountTeamRoutes(
       ));
     }
     final messages = await teamMessages.sendTeamMessage(
-      teamId: id,
+      teamId: teamId,
       senderUsername: user,
       recipientEntries: entries,
     );
@@ -157,10 +152,13 @@ void mountTeamRoutes(
   app.get('/api/v1/teams/<id>/messages',
       (Request request, String id) async {
     final user = _requireAuth(request);
-    final limit = _parseIntParam(request, 'limit', defaultValue: 50, max: 200);
-    final offset = _parseIntParam(request, 'offset', defaultValue: 0);
+    final teamId = requireUuid(id, field: 'id');
+    final limit = parseNonNegativeIntQuery(request.url, 'limit',
+        defaultValue: 50, max: 200);
+    final offset =
+        parseNonNegativeIntQuery(request.url, 'offset', defaultValue: 0);
     final list = await teamMessages.getTeamMessages(
-      teamId: id,
+      teamId: teamId,
       username: user,
       limit: limit,
       offset: offset,
@@ -179,18 +177,10 @@ String _requireAuth(Request request) {
   return username;
 }
 
-int _parseIntParam(
-  Request request,
-  String name, {
-  required int defaultValue,
-  int? max,
-}) {
-  final raw = request.url.queryParameters[name];
-  if (raw == null || raw.isEmpty) return defaultValue;
-  final parsed = int.tryParse(raw);
-  if (parsed == null || parsed < 0) {
-    throw HttpError(400, '$name must be a non-negative integer');
+String _requireUsername(String value) {
+  if (!_usernameRegExp.hasMatch(value)) {
+    throw const HttpError(400,
+        'username must be 3-32 lowercase alphanumeric characters');
   }
-  if (max != null && parsed > max) return max;
-  return parsed;
+  return value;
 }

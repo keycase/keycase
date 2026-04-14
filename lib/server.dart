@@ -11,7 +11,9 @@ import 'db/message_repo.dart';
 import 'db/proof_repo.dart';
 import 'db/team_message_repo.dart';
 import 'db/team_repo.dart';
+import 'http/access_log.dart';
 import 'http/middleware.dart';
+import 'http/rate_limit.dart';
 import 'routes/file_routes.dart';
 import 'routes/health_routes.dart';
 import 'routes/identity_routes.dart';
@@ -28,6 +30,8 @@ Handler buildHandler({
   required Database database,
   required FileStore fileStore,
   ProofVerifiers? verifiers,
+  DateTime? startTime,
+  RateLimiter? rateLimiter,
 }) {
   final identities = IdentityRepo(database);
   final proofs = ProofRepo(database);
@@ -36,9 +40,14 @@ Handler buildHandler({
   final teamMessages = TeamMessageRepo(database, teams);
   final files = FileRepo(database);
   final v = verifiers ?? ProofVerifiers();
+  final limiter = rateLimiter ?? RateLimiter();
 
   final app = Router();
-  mountHealthRoutes(app);
+  mountHealthRoutes(
+    app,
+    database: database,
+    startTime: startTime ?? DateTime.now(),
+  );
   mountIdentityRoutes(app, identities: identities, proofs: proofs);
   mountProofRoutes(app,
       identities: identities, proofs: proofs, verifiers: v);
@@ -48,10 +57,17 @@ Handler buildHandler({
   mountTeamRoutes(app, teams: teams, teamMessages: teamMessages);
   mountFileRoutes(app, identities: identities, files: files, store: fileStore);
 
+  // Order matters:
+  //  access log wraps everything (to capture rejections too),
+  //  CORS runs next so preflights never hit auth/rate limit,
+  //  errors are converted to JSON before any handler runs,
+  //  rate limit guards before auth (cheap denial path),
+  //  auth resolves the username for downstream handlers and logs.
   return const Pipeline()
-      .addMiddleware(logRequests())
+      .addMiddleware(accessLogMiddleware())
       .addMiddleware(_corsMiddleware())
       .addMiddleware(errorMiddleware())
+      .addMiddleware(limiter.middleware())
       .addMiddleware(authMiddleware(identities))
       .addHandler(app.call);
 }
@@ -63,11 +79,15 @@ Future<HttpServer> startServer({
   String host = 'localhost',
   int port = 8080,
   ProofVerifiers? verifiers,
+  DateTime? startTime,
+  RateLimiter? rateLimiter,
 }) {
   final handler = buildHandler(
     database: database,
     fileStore: fileStore,
     verifiers: verifiers,
+    startTime: startTime,
+    rateLimiter: rateLimiter,
   );
   return shelf_io.serve(handler, host, port);
 }

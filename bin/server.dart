@@ -42,23 +42,42 @@ Future<void> main(List<String> args) async {
   final fileStore = LocalFileStore(config.fileStoragePath);
   stdout.writeln('file storage at ${config.fileStoragePath}');
 
+  final startTime = DateTime.now();
   final server = await startServer(
     database: db,
     fileStore: fileStore,
     host: config.host,
     port: config.port,
+    startTime: startTime,
   );
   stdout.writeln(
       'KeyCase server listening on http://${config.host}:${server.port}');
 
-  // Graceful shutdown on SIGINT/SIGTERM.
+  // Graceful shutdown: stop accepting new connections, wait for
+  // in-flight requests (bounded by [_shutdownTimeout] so a hung
+  // handler can't block forever), then close the database.
+  var shuttingDown = false;
   Future<void> shutdown(ProcessSignal sig) async {
-    stdout.writeln('received ${sig.toString()}, shutting down...');
-    await server.close(force: false);
-    await db.close();
+    if (shuttingDown) return;
+    shuttingDown = true;
+    stdout.writeln('received $sig, shutting down...');
+    try {
+      await server
+          .close(force: false)
+          .timeout(_shutdownTimeout, onTimeout: () => server.close(force: true));
+    } catch (e) {
+      stderr.writeln('error closing http server: $e');
+    }
+    try {
+      await db.close();
+    } catch (e) {
+      stderr.writeln('error closing database: $e');
+    }
     exit(0);
   }
 
   ProcessSignal.sigint.watch().listen(shutdown);
   ProcessSignal.sigterm.watch().listen(shutdown);
 }
+
+const _shutdownTimeout = Duration(seconds: 30);

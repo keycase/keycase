@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:keycase_core/keycase_core.dart' as core;
 import 'package:shelf/shelf.dart';
@@ -8,6 +9,10 @@ import '../db/identity_repo.dart';
 import 'responses.dart';
 
 /// Catch [HttpError] and any other exception and render them as JSON.
+///
+/// Unexpected exceptions are logged server-side (with stack trace) but
+/// never leak to clients — responses are always the sanitized
+/// `{ error, code }` shape.
 Middleware errorMiddleware() {
   return (Handler inner) {
     return (Request request) async {
@@ -16,11 +21,14 @@ Middleware errorMiddleware() {
       } on HttpError catch (e) {
         return e.toResponse();
       } on FormatException catch (e) {
-        return HttpError(400, 'invalid request body: ${e.message}').toResponse();
+        return HttpError(
+          400,
+          'invalid request body: ${e.message}',
+          code: 'INVALID_JSON',
+        ).toResponse();
       } catch (e, st) {
-        // ignore: avoid_print
-        print('unhandled error: $e\n$st');
-        return HttpError(500, 'internal server error').toResponse();
+        stderr.writeln('[error] ${request.method} ${request.url}: $e\n$st');
+        return const HttpError(500, 'internal server error').toResponse();
       }
     };
   };
@@ -47,19 +55,31 @@ Middleware authMiddleware(IdentityRepo identities) {
 
       final header = request.headers['authorization'];
       if (header == null || !header.startsWith('KeyCase ')) {
-        throw const HttpError(401, 'missing KeyCase authorization header');
+        throw const HttpError(
+          401,
+          'missing KeyCase authorization header',
+          code: 'MISSING_AUTH',
+        );
       }
       final creds = header.substring('KeyCase '.length);
       final colon = creds.indexOf(':');
       if (colon <= 0 || colon == creds.length - 1) {
-        throw const HttpError(401, 'malformed authorization header');
+        throw const HttpError(
+          401,
+          'malformed authorization header',
+          code: 'MALFORMED_AUTH',
+        );
       }
       final username = creds.substring(0, colon);
       final signature = creds.substring(colon + 1);
 
       final identity = await identities.findByUsername(username);
       if (identity == null) {
-        throw const HttpError(401, 'unknown identity');
+        throw const HttpError(
+          401,
+          'unknown identity',
+          code: 'UNKNOWN_IDENTITY',
+        );
       }
 
       // Read the full body and re-inject it so downstream handlers can
@@ -67,7 +87,11 @@ Middleware authMiddleware(IdentityRepo identities) {
       final body = await request.readAsString();
       final ok = await core.verify(body, signature, identity.publicKey);
       if (!ok) {
-        throw const HttpError(401, 'invalid signature');
+        throw const HttpError(
+          401,
+          'invalid signature',
+          code: 'INVALID_SIGNATURE',
+        );
       }
 
       final rebuilt = request.change(
