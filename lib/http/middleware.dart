@@ -80,7 +80,11 @@ Middleware authMiddleware(IdentityRepo identities) {
 }
 
 bool _skipAuth(Request request) {
-  if (request.method == 'GET' || request.method == 'OPTIONS') return true;
+  if (request.method == 'OPTIONS') return true;
+  // Message endpoints always require auth, including GETs — inboxes and
+  // conversations are private to the authenticated user.
+  if (request.url.path.startsWith('api/v1/messages')) return false;
+  if (request.method == 'GET') return true;
   // Registration is the bootstrap step and cannot use auth headers.
   if (request.method == 'POST' && request.url.path == 'api/v1/identity') {
     return true;

@@ -6,11 +6,13 @@ import 'package:shelf_router/shelf_router.dart';
 
 import 'db/database.dart';
 import 'db/identity_repo.dart';
+import 'db/message_repo.dart';
 import 'db/proof_repo.dart';
 import 'http/middleware.dart';
 import 'routes/health_routes.dart';
 import 'routes/identity_routes.dart';
 import 'routes/key_signing_routes.dart';
+import 'routes/message_routes.dart';
 import 'routes/proof_routes.dart';
 import 'verification.dart';
 
@@ -22,6 +24,7 @@ Handler buildHandler({
 }) {
   final identities = IdentityRepo(database);
   final proofs = ProofRepo(database);
+  final messages = MessageRepo(database);
   final v = verifiers ?? ProofVerifiers();
 
   final app = Router();
@@ -31,6 +34,7 @@ Handler buildHandler({
       identities: identities, proofs: proofs, verifiers: v);
   mountKeySigningRoutes(app,
       identities: identities, proofs: proofs, verifiers: v);
+  mountMessageRoutes(app, identities: identities, messages: messages);
 
   return const Pipeline()
       .addMiddleware(logRequests())
