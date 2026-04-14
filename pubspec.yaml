@@ -1,6 +1,7 @@
 name: keycase_server
 description: KeyCase identity server — stores and serves cryptographic identity proofs. Self-hostable.
 version: 0.1.0
+publish_to: none
 
 environment:
   sdk: ^3.0.0
@@ -13,8 +14,8 @@ dependencies:
   dotenv: ^4.2.0
   postgres: ^3.1.0
   keycase_core:
-    git:
-      url: https://github.com/keycase/core.git
+    path: ../core
+  uuid: ^4.0.0
 
 dev_dependencies:
   test: ^1.24.0

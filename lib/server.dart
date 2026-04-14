@@ -1,33 +1,56 @@
 import 'dart:io';
+
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
-import 'routes/identity_routes.dart';
-import 'routes/proof_routes.dart';
+
+import 'db/database.dart';
+import 'db/identity_repo.dart';
+import 'db/proof_repo.dart';
+import 'http/middleware.dart';
 import 'routes/health_routes.dart';
+import 'routes/identity_routes.dart';
+import 'routes/key_signing_routes.dart';
+import 'routes/proof_routes.dart';
+import 'verification.dart';
 
-/// Start the KeyCase server.
-Future<HttpServer> startServer({String host = 'localhost', int port = 8080}) async {
+/// Build the Shelf [Handler] that serves the KeyCase API. Exposed so
+/// tests can drive it in-process without binding a port.
+Handler buildHandler({
+  required Database database,
+  ProofVerifiers? verifiers,
+}) {
+  final identities = IdentityRepo(database);
+  final proofs = ProofRepo(database);
+  final v = verifiers ?? ProofVerifiers();
+
   final app = Router();
-
-  // Health check
   mountHealthRoutes(app);
+  mountIdentityRoutes(app, identities: identities, proofs: proofs);
+  mountProofRoutes(app,
+      identities: identities, proofs: proofs, verifiers: v);
+  mountKeySigningRoutes(app,
+      identities: identities, proofs: proofs, verifiers: v);
 
-  // Identity endpoints
-  mountIdentityRoutes(app);
-
-  // Proof endpoints
-  mountProofRoutes(app);
-
-  final handler = const Pipeline()
+  return const Pipeline()
       .addMiddleware(logRequests())
       .addMiddleware(_corsMiddleware())
+      .addMiddleware(errorMiddleware())
+      .addMiddleware(authMiddleware(identities))
       .addHandler(app.call);
+}
 
+/// Start the KeyCase server bound to [host]:[port].
+Future<HttpServer> startServer({
+  required Database database,
+  String host = 'localhost',
+  int port = 8080,
+  ProofVerifiers? verifiers,
+}) {
+  final handler = buildHandler(database: database, verifiers: verifiers);
   return shelf_io.serve(handler, host, port);
 }
 
-/// CORS middleware for cross-origin requests.
 Middleware _corsMiddleware() {
   return (Handler handler) {
     return (Request request) async {

@@ -1,27 +1,58 @@
 import 'dart:io';
+
 import 'package:args/args.dart';
+import 'package:keycase_server/config.dart';
+import 'package:keycase_server/db/database.dart';
 import 'package:keycase_server/server.dart';
 
 Future<void> main(List<String> args) async {
   final parser = ArgParser()
-    ..addOption('port', abbr: 'p', defaultsTo: '8080', help: 'Port to listen on')
-    ..addOption('host', abbr: 'h', defaultsTo: 'localhost', help: 'Host to bind to')
+    ..addOption('port', abbr: 'p', help: 'Port to listen on (overrides PORT)')
+    ..addOption('host', abbr: 'h', help: 'Host to bind to (overrides HOST)')
     ..addFlag('help', negatable: false, help: 'Show usage information');
 
   final results = parser.parse(args);
-
   if (results['help'] as bool) {
-    print('KeyCase Server');
-    print('');
-    print('Usage: keycase [options]');
-    print('');
-    print(parser.usage);
+    stdout.writeln('KeyCase Server\n');
+    stdout.writeln('Usage: keycase [options]\n');
+    stdout.writeln(parser.usage);
+    return;
+  }
+
+  final overrides = <String, String>{
+    if (results['port'] != null) 'PORT': results['port'] as String,
+    if (results['host'] != null) 'HOST': results['host'] as String,
+  };
+
+  final ServerConfig config;
+  try {
+    config = ServerConfig.load(overrides: overrides);
+  } on StateError catch (e) {
+    stderr.writeln('config error: ${e.message}');
+    exit(2);
+  }
+
+  stdout.writeln('connecting to database...');
+  final db = await Database.open(config.databaseUrl);
+  stdout.writeln('running migrations from ${config.migrationsDir}...');
+  await db.runMigrations(config.migrationsDir);
+
+  final server = await startServer(
+    database: db,
+    host: config.host,
+    port: config.port,
+  );
+  stdout.writeln(
+      'KeyCase server listening on http://${config.host}:${server.port}');
+
+  // Graceful shutdown on SIGINT/SIGTERM.
+  Future<void> shutdown(ProcessSignal sig) async {
+    stdout.writeln('received ${sig.toString()}, shutting down...');
+    await server.close(force: false);
+    await db.close();
     exit(0);
   }
 
-  final port = int.parse(results['port'] as String);
-  final host = results['host'] as String;
-
-  final server = await startServer(host: host, port: port);
-  print('KeyCase server listening on http://$host:$port');
+  ProcessSignal.sigint.watch().listen(shutdown);
+  ProcessSignal.sigterm.watch().listen(shutdown);
 }
