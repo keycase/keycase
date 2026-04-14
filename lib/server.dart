@@ -8,12 +8,15 @@ import 'db/database.dart';
 import 'db/identity_repo.dart';
 import 'db/message_repo.dart';
 import 'db/proof_repo.dart';
+import 'db/team_message_repo.dart';
+import 'db/team_repo.dart';
 import 'http/middleware.dart';
 import 'routes/health_routes.dart';
 import 'routes/identity_routes.dart';
 import 'routes/key_signing_routes.dart';
 import 'routes/message_routes.dart';
 import 'routes/proof_routes.dart';
+import 'routes/team_routes.dart';
 import 'verification.dart';
 
 /// Build the Shelf [Handler] that serves the KeyCase API. Exposed so
@@ -25,6 +28,8 @@ Handler buildHandler({
   final identities = IdentityRepo(database);
   final proofs = ProofRepo(database);
   final messages = MessageRepo(database);
+  final teams = TeamRepo(database);
+  final teamMessages = TeamMessageRepo(database, teams);
   final v = verifiers ?? ProofVerifiers();
 
   final app = Router();
@@ -35,6 +40,7 @@ Handler buildHandler({
   mountKeySigningRoutes(app,
       identities: identities, proofs: proofs, verifiers: v);
   mountMessageRoutes(app, identities: identities, messages: messages);
+  mountTeamRoutes(app, teams: teams, teamMessages: teamMessages);
 
   return const Pipeline()
       .addMiddleware(logRequests())
