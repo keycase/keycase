@@ -9,12 +9,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: keycase
       - uses: actions/checkout@v4
         with:
           repository: keycase/core
-          path: ../core
+          path: core
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: stable
       - run: dart pub get
+        working-directory: keycase
       - run: dart analyze --fatal-infos
+        working-directory: keycase
