@@ -8,6 +8,7 @@ import '../db/proof_repo.dart';
 import '../http/middleware.dart';
 import '../http/responses.dart';
 import '../verification.dart';
+import '../ws/connection_manager.dart';
 
 final _uuid = const Uuid();
 
@@ -16,6 +17,7 @@ void mountProofRoutes(
   required IdentityRepo identities,
   required ProofRepo proofs,
   required ProofVerifiers verifiers,
+  ConnectionManager? connections,
 }) {
   // Submit a new proof. Verifies immediately and records result.
   app.post('/api/v1/proof', (Request request) async {
@@ -67,6 +69,12 @@ void mountProofRoutes(
     // ignore: avoid_print
     print('proof ${updated.id} (${type.name}) for $identityUsername → '
         '${updated.status.name}');
+    if (connections != null && updated.status == ProofStatus.verified) {
+      connections.sendToUser(identityUsername, {
+        'type': 'proof_verified',
+        'proof': updated.toJson(),
+      });
+    }
     return jsonCreated(updated.toJson());
   });
 
@@ -112,6 +120,12 @@ void mountProofRoutes(
     );
     // ignore: avoid_print
     print('re-verified proof ${updated.id} → ${updated.status.name}');
+    if (connections != null && updated.status == ProofStatus.verified) {
+      connections.sendToUser(updated.identityUsername, {
+        'type': 'proof_verified',
+        'proof': updated.toJson(),
+      });
+    }
     return jsonOk(updated.toJson());
   });
 }

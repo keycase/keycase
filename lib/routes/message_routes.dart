@@ -5,6 +5,7 @@ import '../db/identity_repo.dart';
 import '../db/message_repo.dart';
 import '../http/middleware.dart';
 import '../http/responses.dart';
+import '../ws/connection_manager.dart';
 
 /// Mount `/api/v1/messages` routes.
 ///
@@ -15,6 +16,7 @@ void mountMessageRoutes(
   Router app, {
   required IdentityRepo identities,
   required MessageRepo messages,
+  ConnectionManager? connections,
 }) {
   // Send a message.
   app.post('/api/v1/messages', (Request request) async {
@@ -41,6 +43,10 @@ void mountMessageRoutes(
       nonce: nonce,
       senderPublicKey: senderIdentity.publicKey,
     );
+    connections?.sendToUser(recipientUsername, {
+      'type': 'message',
+      'message': message.toJson(),
+    });
     return jsonCreated(message.toJson());
   });
 

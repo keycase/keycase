@@ -21,8 +21,10 @@ import 'routes/key_signing_routes.dart';
 import 'routes/message_routes.dart';
 import 'routes/proof_routes.dart';
 import 'routes/team_routes.dart';
+import 'routes/ws_routes.dart';
 import 'storage/file_store.dart';
 import 'verification.dart';
+import 'ws/connection_manager.dart';
 
 /// Build the Shelf [Handler] that serves the KeyCase API. Exposed so
 /// tests can drive it in-process without binding a port.
@@ -32,6 +34,7 @@ Handler buildHandler({
   ProofVerifiers? verifiers,
   DateTime? startTime,
   RateLimiter? rateLimiter,
+  ConnectionManager? connections,
 }) {
   final identities = IdentityRepo(database);
   final proofs = ProofRepo(database);
@@ -41,6 +44,7 @@ Handler buildHandler({
   final files = FileRepo(database);
   final v = verifiers ?? ProofVerifiers();
   final limiter = rateLimiter ?? RateLimiter();
+  final ws = connections ?? ConnectionManager(teams: teams);
 
   final app = Router();
   mountHealthRoutes(
@@ -50,12 +54,22 @@ Handler buildHandler({
   );
   mountIdentityRoutes(app, identities: identities, proofs: proofs);
   mountProofRoutes(app,
-      identities: identities, proofs: proofs, verifiers: v);
+      identities: identities,
+      proofs: proofs,
+      verifiers: v,
+      connections: ws);
   mountKeySigningRoutes(app,
       identities: identities, proofs: proofs, verifiers: v);
-  mountMessageRoutes(app, identities: identities, messages: messages);
-  mountTeamRoutes(app, teams: teams, teamMessages: teamMessages);
-  mountFileRoutes(app, identities: identities, files: files, store: fileStore);
+  mountMessageRoutes(app,
+      identities: identities, messages: messages, connections: ws);
+  mountTeamRoutes(app,
+      teams: teams, teamMessages: teamMessages, connections: ws);
+  mountFileRoutes(app,
+      identities: identities,
+      files: files,
+      store: fileStore,
+      connections: ws);
+  mountWsRoutes(app, identities: identities, connections: ws);
 
   // Order matters:
   //  access log wraps everything (to capture rejections too),
@@ -81,6 +95,7 @@ Future<HttpServer> startServer({
   ProofVerifiers? verifiers,
   DateTime? startTime,
   RateLimiter? rateLimiter,
+  ConnectionManager? connections,
 }) {
   final handler = buildHandler(
     database: database,
@@ -88,6 +103,7 @@ Future<HttpServer> startServer({
     verifiers: verifiers,
     startTime: startTime,
     rateLimiter: rateLimiter,
+    connections: connections,
   );
   return shelf_io.serve(handler, host, port);
 }

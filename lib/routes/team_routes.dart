@@ -5,6 +5,7 @@ import '../db/team_message_repo.dart';
 import '../db/team_repo.dart';
 import '../http/middleware.dart';
 import '../http/responses.dart';
+import '../ws/connection_manager.dart';
 
 final RegExp _teamNameRegExp = RegExp(r'^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])$');
 final RegExp _usernameRegExp = RegExp(r'^[a-z0-9]{3,32}$');
@@ -13,6 +14,7 @@ void mountTeamRoutes(
   Router app, {
   required TeamRepo teams,
   required TeamMessageRepo teamMessages,
+  ConnectionManager? connections,
 }) {
   // Create a team.
   app.post('/api/v1/teams', (Request request) async {
@@ -67,6 +69,15 @@ void mountTeamRoutes(
       role: role,
       addedByUsername: user,
     );
+    if (connections != null) {
+      final team = await teams.getTeam(teamId);
+      if (team != null) {
+        connections.sendToUser(username, {
+          'type': 'team_invite',
+          'team': team.toJson(),
+        });
+      }
+    }
     return jsonCreated(member.toJson());
   });
 
@@ -143,6 +154,18 @@ void mountTeamRoutes(
       senderUsername: user,
       recipientEntries: entries,
     );
+    // Deliver each recipient's own ciphertext row. Sending one shared
+    // envelope would leak the others' wrapped keys, so we fan out
+    // per-recipient rather than calling broadcastToTeam.
+    if (connections != null) {
+      for (final m in messages) {
+        connections.sendToUser(m.recipientUsername, {
+          'type': 'team_message',
+          'teamId': teamId,
+          'message': m.toJson(),
+        });
+      }
+    }
     return jsonCreated({
       'messages': [for (final m in messages) m.toJson()],
     });

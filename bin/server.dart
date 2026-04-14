@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:keycase_server/config.dart';
 import 'package:keycase_server/db/database.dart';
+import 'package:keycase_server/db/team_repo.dart';
 import 'package:keycase_server/server.dart';
 import 'package:keycase_server/storage/file_store.dart';
+import 'package:keycase_server/ws/connection_manager.dart';
 
 Future<void> main(List<String> args) async {
   final parser = ArgParser()
@@ -43,12 +45,14 @@ Future<void> main(List<String> args) async {
   stdout.writeln('file storage at ${config.fileStoragePath}');
 
   final startTime = DateTime.now();
+  final connections = ConnectionManager(teams: TeamRepo(db));
   final server = await startServer(
     database: db,
     fileStore: fileStore,
     host: config.host,
     port: config.port,
     startTime: startTime,
+    connections: connections,
   );
   stdout.writeln(
       'KeyCase server listening on http://${config.host}:${server.port}');
@@ -61,6 +65,11 @@ Future<void> main(List<String> args) async {
     if (shuttingDown) return;
     shuttingDown = true;
     stdout.writeln('received $sig, shutting down...');
+    try {
+      await connections.closeAll();
+    } catch (e) {
+      stderr.writeln('error closing websockets: $e');
+    }
     try {
       await server
           .close(force: false)

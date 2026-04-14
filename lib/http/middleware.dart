@@ -111,6 +111,10 @@ bool _skipAuth(Request request) {
   if (request.url.path.startsWith('api/v1/teams')) return false;
   if (request.url.path.startsWith('api/v1/files')) return false;
   if (request.url.path.startsWith('api/v1/folders')) return false;
+  if (request.url.path == 'api/v1/presence') return false;
+  // WebSocket upgrade uses in-protocol auth (first frame), not the
+  // body-signing scheme, so skip HTTP-layer auth here.
+  if (request.url.path == 'api/v1/ws') return true;
   if (request.method == 'GET') return true;
   // Registration is the bootstrap step and cannot use auth headers.
   if (request.method == 'POST' && request.url.path == 'api/v1/identity') {

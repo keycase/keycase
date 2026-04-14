@@ -12,6 +12,7 @@ import '../db/identity_repo.dart';
 import '../http/middleware.dart';
 import '../http/responses.dart';
 import '../storage/file_store.dart';
+import '../ws/connection_manager.dart';
 
 /// Hard cap on a single uploaded blob. Enforced while streaming so we
 /// fail fast instead of buffering hostile payloads.
@@ -49,6 +50,7 @@ void mountFileRoutes(
   required IdentityRepo identities,
   required FileRepo files,
   required FileStore store,
+  ConnectionManager? connections,
 }) {
   // Upload — auth is handled inline because the body is binary and
   // cannot pass through the UTF-8 body-signing middleware.
@@ -216,6 +218,13 @@ void mountFileRoutes(
       encryptedKey: encryptedKey,
       nonce: nonce,
     );
+    if (connections != null) {
+      final view = await files.getFile(fileId, shareWith);
+      connections.sendToUser(shareWith, {
+        'type': 'file_shared',
+        'file': view.toJson(),
+      });
+    }
     return jsonCreated({'ok': true});
   });
 
