@@ -8,12 +8,14 @@ class ServerConfig {
   final String host;
   final int port;
   final String migrationsDir;
+  final String fileStoragePath;
 
   const ServerConfig({
     required this.databaseUrl,
     required this.host,
     required this.port,
     required this.migrationsDir,
+    required this.fileStoragePath,
   });
 
   /// Load from a `.env` file in the working directory (if present) plus
@@ -35,6 +37,7 @@ class ServerConfig {
       host: read('HOST') ?? 'localhost',
       port: int.parse(read('PORT') ?? '8080'),
       migrationsDir: read('MIGRATIONS_DIR') ?? 'db/migrations',
+      fileStoragePath: read('FILE_STORAGE_PATH') ?? '/data/files',
     );
   }
 }

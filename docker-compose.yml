@@ -26,6 +26,9 @@ services:
       HOST: 0.0.0.0
       PORT: "8080"
       MIGRATIONS_DIR: /app/db/migrations
+      FILE_STORAGE_PATH: /data/files
+    volumes:
+      - keycase_files:/data/files
     ports:
       - "8080:8080"
     depends_on:
@@ -34,3 +37,4 @@ services:
 
 volumes:
   keycase_pg:
+  keycase_files:

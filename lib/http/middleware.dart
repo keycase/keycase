@@ -85,9 +85,17 @@ bool _skipAuth(Request request) {
   // inboxes, conversations, and team state are private to the caller.
   if (request.url.path.startsWith('api/v1/messages')) return false;
   if (request.url.path.startsWith('api/v1/teams')) return false;
+  if (request.url.path.startsWith('api/v1/files')) return false;
+  if (request.url.path.startsWith('api/v1/folders')) return false;
   if (request.method == 'GET') return true;
   // Registration is the bootstrap step and cannot use auth headers.
   if (request.method == 'POST' && request.url.path == 'api/v1/identity') {
+    return true;
+  }
+  // File uploads are multipart/binary — the body is not UTF-8 safe, so
+  // signature verification happens inside the handler against the
+  // metadata part instead of the raw body.
+  if (request.method == 'POST' && request.url.path == 'api/v1/files') {
     return true;
   }
   return false;

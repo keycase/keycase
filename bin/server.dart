@@ -4,6 +4,7 @@ import 'package:args/args.dart';
 import 'package:keycase_server/config.dart';
 import 'package:keycase_server/db/database.dart';
 import 'package:keycase_server/server.dart';
+import 'package:keycase_server/storage/file_store.dart';
 
 Future<void> main(List<String> args) async {
   final parser = ArgParser()
@@ -37,8 +38,13 @@ Future<void> main(List<String> args) async {
   stdout.writeln('running migrations from ${config.migrationsDir}...');
   await db.runMigrations(config.migrationsDir);
 
+  await Directory(config.fileStoragePath).create(recursive: true);
+  final fileStore = LocalFileStore(config.fileStoragePath);
+  stdout.writeln('file storage at ${config.fileStoragePath}');
+
   final server = await startServer(
     database: db,
+    fileStore: fileStore,
     host: config.host,
     port: config.port,
   );

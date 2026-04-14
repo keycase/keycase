@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:keycase_core/keycase_core.dart';
 import 'package:keycase_server/db/database.dart';
 import 'package:keycase_server/server.dart';
+import 'package:keycase_server/storage/file_store.dart';
 import 'package:keycase_server/verification.dart';
 import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
@@ -71,8 +72,10 @@ void main() {
       'DROP TABLE IF EXISTS key_signatures, proofs, identities CASCADE',
     );
     await db.runMigrations('db/migrations');
+    final tmp = await Directory.systemTemp.createTemp('keycase_files_');
     handler = buildHandler(
       database: db,
+      fileStore: LocalFileStore(tmp.path),
       verifiers: ProofVerifiers(),
     );
   });
